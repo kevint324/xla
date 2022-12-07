@@ -60,7 +60,7 @@ XlaOpVector SizeNode::Lower(LoweringContext* loctx) const {
   return ReturnOp(xla::GetDimensionSize(input, this->dim_), loctx);
 }
 
-std::string SizeNode::ToString() const { return "SizeNode for op aten::size"; }
+std::string SizeNode::ToString() const { return "aten::size"; }
 
 SizeAdd::SizeAdd(torch::lazy::Value a, torch::lazy::Value b)
     : XlaNode(torch::lazy::OpKind{c10::Symbol::fromQualString("aten::add")},
@@ -83,7 +83,7 @@ int64_t SizeAdd::getDynamicValue() const {
   return dim_node_0->getDynamicValue() + dim_node_1->getDynamicValue();
 }
 
-std::string SizeAdd::ToString() const { return "SizeAdd for op aten::add"; }
+std::string SizeAdd::ToString() const { return "aten::add"; }
 
 XlaOpVector SizeAdd::Lower(LoweringContext* loctx) const {
   auto input1 = loctx->GetOutputOp(operand(0));
