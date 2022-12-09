@@ -83,7 +83,7 @@ int64_t SizeAdd::getDynamicValue() const {
   return dim_node_0->getDynamicValue() + dim_node_1->getDynamicValue();
 }
 
-std::string SizeAdd::ToString() const { return "aten::add"; }
+std::string SizeAdd::ToString() const { return "aten::add_size"; }
 
 XlaOpVector SizeAdd::Lower(LoweringContext* loctx) const {
   auto input1 = loctx->GetOutputOp(operand(0));
