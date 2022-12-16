@@ -34,6 +34,7 @@ class TestDynamicShapes(unittest.TestCase):
 
   def test_sizeAdd(self):
     self.assertNotEqual(os.environ['XLA_EXPERIMENTAL'], '')
+    # import pdb; pdb.set_trace()
     size1 = 5
     size2 = 2
     t1 = torch.zeros([size1, size2], device=dev)
@@ -52,9 +53,28 @@ class TestDynamicShapes(unittest.TestCase):
     # Exercise SizeAdd::Lower.
     t4 = t3.expand(dyn_size)
     print(torch_xla._XLAC._get_xla_tensors_text([t4]))
-    self.assertEqual(t4.size(0), 3)
+    self.assertEqual(t4.size(0), 3) # exception throws here.
     print(torch_xla._XLAC._get_xla_tensors_text([t4]))
 
+  def test_sizeAdd_shortened(self):
+    self.assertNotEqual(os.environ['XLA_EXPERIMENTAL'], '')
+    size1 = 5
+    size2 = 2
+    t1 = torch.zeros([size1, size2], device=dev)
+    t1[3][0] = 1
+    # t2 has size [<=10, 2]
+    t2 = torch.nonzero(t1)
+    # Create a SizeAdd IR node.
+    # t2.shape[1] generates a SizeConstant node.
+    # import pdb; pdb.set_trace()
+    shape0 = t2.shape[0]
+    shape1 = t2.shape[1]
+    dyn_size = shape0 + shape1
+    t3 = torch.ones(1, device=dev)
+    # Exercise SizeAdd::Lower.
+    t4 = t3.expand(dyn_size)
+    print(torch_xla._XLAC._get_xla_tensors_hlo([t4]))
+    self.assertEqual(t4.size(0), 3) # exception throws here.
 
 if __name__ == '__main__':
   test = unittest.main()
