@@ -1,3 +1,5 @@
+from subprocess import Popen
+import time
 import args_parse
 
 SUPPORTED_MODELS = [
@@ -31,9 +33,6 @@ MODEL_OPTS = {
         'choices': ['batch', 'spatial', 'conv', 'linear'],
         'nargs': '+',
         'default': [],
-    },
-    '--profile': {
-        'action': 'store_true',
     },
     '--use_virtual_device': {
         'action': 'store_true',
@@ -209,6 +208,7 @@ def train_imagenet():
       partition_spec = (0, 1)
       for name, layer in model.named_modules():
         if 'fc' in name:
+          print(f'confirmed sharding on {name}')
           xs.mark_sharding(layer.weight, mesh, partition_spec)
 
     # Input sharding
@@ -279,6 +279,9 @@ def train_imagenet():
       if step % FLAGS.log_steps == 0:
         xm.add_step_closure(
             _train_update, args=(device, step, loss, tracker, epoch, writer))
+      if FLAGS.profile and step == 100:
+        label = '_'.join(FLAGS.sharding) + '_' + str(FLAGS.batch_size)
+        Popen(f'/usr/local/bin/python scripts/capture_profile.py --service_addr 127.0.0.1:9012 --logdir {os.environ['HOME']}/autoprof/{label} --duration_ms 10000'.split())
 
   def test_loop_fn(loader, epoch):
     total_samples, correct = 0, 0
@@ -302,18 +305,22 @@ def train_imagenet():
   accuracy, max_accuracy = 0.0, 0.0
   for epoch in range(1, FLAGS.num_epochs + 1):
     xm.master_print('Epoch {} train begin {}'.format(epoch, test_utils.now()))
+    start = time.time()
     train_loop_fn(train_loader, epoch)
+    end = time.time()
+    with open(f'{os.environ['HOME']}/epoch_durations', 'a') as f:
+      f.write(f'resnet50: sharding={FLAGS.sharding} batch_size={FLAGS.batch_size} epoch_duration={end - start}s\n')
     xm.master_print('Epoch {} train end {}'.format(epoch, test_utils.now()))
-    if not FLAGS.test_only_at_end or epoch == FLAGS.num_epochs:
-      accuracy = test_loop_fn(test_loader, epoch)
-      xm.master_print('Epoch {} test end {}, Accuracy={:.2f}'.format(
-          epoch, test_utils.now(), accuracy))
-      max_accuracy = max(accuracy, max_accuracy)
-      test_utils.write_to_summary(
-          writer,
-          epoch,
-          dict_to_write={'Accuracy/test': accuracy},
-          write_xla_metrics=True)
+    #if not FLAGS.test_only_at_end or epoch == FLAGS.num_epochs:
+    #  accuracy = test_loop_fn(test_loader, epoch)
+    #  xm.master_print('Epoch {} test end {}, Accuracy={:.2f}'.format(
+    #      epoch, test_utils.now(), accuracy))
+    #  max_accuracy = max(accuracy, max_accuracy)
+    #  test_utils.write_to_summary(
+    #      writer,
+    #      epoch,
+    #      dict_to_write={'Accuracy/test': accuracy},
+    #      write_xla_metrics=True)
     if FLAGS.metrics_debug:
       xm.master_print(met.metrics_report())
 
@@ -323,8 +330,6 @@ def train_imagenet():
 
 
 if __name__ == '__main__':
-  if FLAGS.use_virtual_device:
-    os.environ['XLA_USE_SPMD'] = '1'
   torch.set_default_tensor_type('torch.FloatTensor')
   accuracy = train_imagenet()
   if accuracy < FLAGS.target_accuracy:

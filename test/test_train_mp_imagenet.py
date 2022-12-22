@@ -1,3 +1,5 @@
+from subprocess import Popen
+import time
 from torch_xla.experimental import pjrt
 import args_parse
 
@@ -34,6 +36,9 @@ MODEL_OPTS = {
     '--ddp_pjrt': {
         'action': 'store_true',
     },
+    '--profile': {
+      'action': 'store_true',
+    }
 }
 
 FLAGS = args_parse.parse_common_options(
@@ -59,10 +64,12 @@ import torchvision.transforms as transforms
 import torch_xla
 import torch_xla.debug.metrics as met
 import torch_xla.distributed.parallel_loader as pl
+import torch_xla.debug.profiler as xp
 import torch_xla.utils.utils as xu
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.test.test_utils as test_utils
+from contextlib import nullcontext
 
 import torch.distributed as dist
 import torch_xla.distributed.xla_backend
@@ -233,10 +240,12 @@ def train_imagenet():
     tracker = xm.RateTracker()
     model.train()
     for step, (data, target) in enumerate(loader):
-      optimizer.zero_grad()
-      output = model(data)
-      loss = loss_fn(output, target)
-      loss.backward()
+      with xp.StepTrace('train_imagenet') if FLAGS.profile else nullcontext():
+        with xp.Trace('build_graph') if FLAGS.profile else nullcontext():
+          optimizer.zero_grad()
+          output = model(data)
+          loss = loss_fn(output, target)
+          loss.backward()
       if FLAGS.ddp:
         optimizer.step()
       else:
@@ -247,6 +256,9 @@ def train_imagenet():
       if step % FLAGS.log_steps == 0:
         xm.add_step_closure(
             _train_update, args=(device, step, loss, tracker, epoch, writer))
+      if step == 100 and xm.is_master_ordinal():
+        label = 'multiprocess_' + str(FLAGS.batch_size)
+        Popen(f'/usr/local/bin/python scripts/capture_profile.py --service_addr 127.0.0.1:9012 --logdir {os.environ['HOME']}/autoprof/{label} --duration_ms 10000'.split())
 
   def test_loop_fn(loader, epoch):
     total_samples, correct = 0, 0
@@ -263,23 +275,31 @@ def train_imagenet():
     accuracy = xm.mesh_reduce('test_accuracy', accuracy, np.mean)
     return accuracy
 
+  if FLAGS.profile:
+    server = xp.start_server(FLAGS.profiler_port)
+
   train_device_loader = pl.MpDeviceLoader(train_loader, device)
   test_device_loader = pl.MpDeviceLoader(test_loader, device)
   accuracy, max_accuracy = 0.0, 0.0
   for epoch in range(1, FLAGS.num_epochs + 1):
     xm.master_print('Epoch {} train begin {}'.format(epoch, test_utils.now()))
+    start = time.time()
     train_loop_fn(train_device_loader, epoch)
+    end = time.time()
+    if xm.is_master_ordinal():
+      with open(f'{os.environ['HOME']}/epoch_durations', 'a') as f:
+        f.write(f'multiprocess: {FLAGS.batch_size} {end - start}s\n')
     xm.master_print('Epoch {} train end {}'.format(epoch, test_utils.now()))
-    if not FLAGS.test_only_at_end or epoch == FLAGS.num_epochs:
-      accuracy = test_loop_fn(test_device_loader, epoch)
-      xm.master_print('Epoch {} test end {}, Accuracy={:.2f}'.format(
-          epoch, test_utils.now(), accuracy))
-      max_accuracy = max(accuracy, max_accuracy)
-      test_utils.write_to_summary(
-          writer,
-          epoch,
-          dict_to_write={'Accuracy/test': accuracy},
-          write_xla_metrics=True)
+    #if not FLAGS.test_only_at_end or epoch == FLAGS.num_epochs:
+    #  accuracy = test_loop_fn(test_device_loader, epoch)
+    #  xm.master_print('Epoch {} test end {}, Accuracy={:.2f}'.format(
+    #      epoch, test_utils.now(), accuracy))
+    #  max_accuracy = max(accuracy, max_accuracy)
+    #  test_utils.write_to_summary(
+    #      writer,
+    #      epoch,
+    #      dict_to_write={'Accuracy/test': accuracy},
+    #      write_xla_metrics=True)
     if FLAGS.metrics_debug:
       xm.master_print(met.metrics_report())
 
