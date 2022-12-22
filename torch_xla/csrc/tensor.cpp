@@ -79,6 +79,14 @@ XLATensorPtr XLATensor::Create(
     c10::optional<at::ScalarType> logical_element_type) {
   XLATensorPtr xtensor = c10::make_intrusive<XLATensor>(
       XLATensor(std::move(ir_value), device, logical_element_type));
+  // Preserve sharding if a new tensor is created from a sharded IR node.
+  if (ir_value) {
+    auto* xla_node = dynamic_cast<XlaNode*>(ir_value.node.get());
+    if (xla_node->GetSharding() != nullptr) {
+      ShardingSpec sharding = ShardingSpec{*xla_node->GetSharding()};
+      xtensor->SetShardingSpec(sharding);
+    }
+  }
   XLAGraphExecutor::Get()->RegisterTensor(xtensor->data());
   if (UseEagerDebugMode()) {
     std::vector<XLATensorPtr> xtensors({xtensor});
@@ -449,6 +457,9 @@ at::Tensor XLATensor::ToTensor(bool detached) {
 void XLATensor::ShallowCopyTo(XLATensorPtr dest) const {
   dest->SetScalarType(data()->logical_element_type);
   dest->SetIrValue(GetIrValue(), /*inplace=*/false);
+  if (sharding_spec() != nullptr) {
+    dest->SetShardingSpec(*sharding_spec());
+  }
 }
 
 void XLATensor::SetScalarType(
